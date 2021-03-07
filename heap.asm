@@ -6,6 +6,7 @@ MEM_RELEASE equ 0x00008000
 
     extern  VirtualAlloc
     extern  VirtualFree
+    extern  GetSystemInfo
 
     global  heap_create
     global  heap_destroy
@@ -18,79 +19,94 @@ MEM_RELEASE equ 0x00008000
     global  heap_size
     global  heap_empty
 
+    struc SYSTEM_INFO
+        .DUMMYUNIONNAME:              resd 1
+        .dwPageSize:                  resd 1
+        .lpMinimumApplicationAddress: resq 1
+        .lpMaximumApplicationAddress: resq 1
+        .dwActiveProcessorMask:       resq 1
+        .dwNumberOfProcessors:        resd 1
+        .dwProcessorType:             resd 1
+        .dwAllocationGranularity:     resd 1
+        .wProcessorLevel:             resw 1
+        .wProcessorRevision:          resw 1
+    endstruc
+
+    section .bss
+
+    my_system_info: resb SYSTEM_INFO_size
+
     section .text
 
 ; [in]  RCX - ptr to heap
-; [in]  RDX - size
-; [in]  R8  - i
+; [in]  RDX - i
 ; [out] void
 sift_down:
-    push R14
-    push R13
-
-    mov  R14, R8 ; largest
-
-    mov  RAX, R8
-    shl  RAX, 1
-    cmp  RAX, RDX
-    jge  sift_down_label1
-
-    mov  R13, [RCX + R14 * 8]
-    cmp  [RCX + RAX * 8], R13
-    jle  sift_down_label1
-    mov  R14, RAX
-sift_down_label1:
-    mov  RAX, R8
+sift_down_label4:
+    ; largest = i
+    mov  R9, RDX
+    ; left = 2 * i + 1
+    mov  RAX, RDX
     shl  RAX, 1
     inc  RAX
-    cmp  RAX, RDX
+    ; left >= size
+    cmp  RAX, [RCX + 8]
+    jge  sift_down_label3
+    ; data[left] <= data[largest]
+    mov  R10, [RCX + R9 * 8 + 16]
+    cmp  [RCX + RAX * 8 + 16], R10
+    jle  sift_down_label1
+    ; largest = left
+    mov  R9, RAX
+sift_down_label1:
+    ; right = 2 * i + 2
+    inc  RAX
+    ; right >= size
+    cmp  RAX, [RCX + 8]
     jge  sift_down_label2
-
-    mov  R13, [RCX + R14 * 8]
-    cmp  [RCX + RAX * 8], R13
+    ; data[right] <= data[largest]
+    mov  R10, [RCX + R9 * 8 + 16]
+    cmp  [RCX + RAX * 8 + 16], R10
     jle  sift_down_label2
-    mov  R14, RAX
+    ; largest = right
+    mov  R9, RAX
 sift_down_label2:
-    cmp  R14, R8
+    ; largest == i
+    cmp  R9, RDX
     je   sift_down_label3
-    
-    mov  RAX, [RCX + R14 * 8]
-    mov  R13, [RCX + R8 * 8]
-    mov  [RCX + R14 * 8], R13
-    mov  [RCX + R8 * 8], RAX
-
-    mov  R8, R14
-    call sift_down
+    ; swap A[i] and A[largest]
+    mov  RAX, [RCX + R9 * 8 + 16]
+    mov  R10, [RCX + RDX * 8 + 16]
+    mov  [RCX + R9 * 8 + 16], R10
+    mov  [RCX + RDX * 8 + 16], RAX
+    ; i = largest
+    mov  RDX, R9
+    jmp  sift_down_label4
 sift_down_label3:
-    pop  R13
-    pop  R14
-
     ret
 
 ; [in]  RCX - ptr to heap
 ; [in]  RDX - i
 ; [out] void
 sift_up:
-    push R13
 sift_up_label1:
     cmp  RDX, 0
     jle  sift_up_label2
-
-    mov  R13, RDX
-    shr  R13, 1
-    mov  RAX, [RCX + R13 * 8]
-    mov  R8, [RCX + RDX * 8]
+    ; parent = (i - 1) / 2
+    mov  R9, RDX
+    dec  R9
+    shr  R9, 1
+    ; swap A[i] and A[parent] if A[parent] < A[i]
+    mov  RAX, [RCX + R9 * 8 + 16]
+    mov  R8, [RCX + RDX * 8 + 16]
     cmp  RAX, R8
     jge  sift_up_label2
-
-    mov  [RCX + RDX * 8], RAX
-    mov  [RCX + R13 * 8], R8
-
-    mov  RDX, R13
+    mov  [RCX + RDX * 8 + 16], RAX
+    mov  [RCX + R9 * 8 + 16], R8
+    ; i = parent
+    mov  RDX, R9
     jmp  sift_up_label1
 sift_up_label2:
-    pop  R13
-
     ret
 
 ; [in]  RCX - ptr to array
@@ -98,44 +114,38 @@ sift_up_label2:
 ; [out] RAX - ptr to heap
 heap_build:
     push R13
-    push R14
-    push R15
+    push R12
 
-    ; save RCX, RDX
-    mov  R13, RCX
-    mov  R14, RDX
+    mov  R13, RDX
+    mov  R12, RCX
 
-    mov  RCX, RDX
+    mov  RCX, R13
     call heap_create
 
-    lea  RCX, [RAX + 16]
-    mov  RDX, R13
-    mov  R8, R14
+    mov  [RAX + 8], R13
+
+    lea  RCX, [RAX + 16] ; 1st arg
+    mov  RDX, R12 ; 2nd arg
+    mov  R8, R13 ; 3rd arg
+    mov  R13, RAX ; R13 - ptr to heap
     call memcpy
 
-    ; load RCX, RDX
-    mov  RDX, R14
-    lea  RCX, [RAX + 16]
+    mov  R12, [R13 + 8]
+    shr  R12, 1
+heap_build_label2:
+    cmp  R12, 0
+    jl   heap_build_label1
 
-    mov  R15, RCX
-    mov  R13, RDX
-
-    mov  R14, R13
-    shr  R14, 1
-    inc  R14
-heap_build_label1:
-    dec  R14
-
-    mov  RCX, R15
-    mov  RDX, R13
-    mov  R8, R14
+    mov  RCX, R13
+    mov  RDX, R12
     call sift_down
 
-    cmp  R14, 0
-    jne  heap_build_label1
+    dec  R12
+    jmp  heap_build_label2
+heap_build_label1:
+    mov  RAX, R13
 
-    pop  R15
-    pop  R14
+    pop  R12
     pop  R13
 
     ret
@@ -151,10 +161,10 @@ heap_size:
 heap_empty:
     cmp  qword [RCX + 8], 0
     jne  heap_empty_label1
-    MOV  RAX, 1
+    mov  RAX, 1
     ret
 heap_empty_label1:
-    MOV  RAX, 0
+    mov  RAX, 0
     ret
 
 ; [in]  RCX - ptr to heap
@@ -172,18 +182,18 @@ heap_top:
 ; [in]  RCX - ptr to heap
 ; [out] void
 heap_pop:
+    ; size <= 0
     cmp  qword [RCX + 8], 0
     jle  heap_pop_label1
-
+    ; size--
     mov  R8, [RCX + 8]
     dec  R8
+    mov  [RCX + 8], R8
+    ; A[0] = A[size - 1]
     mov  R9, [RCX + R8 * 8 + 16]
     mov  [RCX + 16], R9
-    mov  [RCX + 8], R8
 
-    add  RCX, 16
-    mov  RDX, R8
-    mov  R8, 0
+    mov  RDX, 0
     call sift_down
 heap_pop_label1:
     ret
@@ -212,16 +222,13 @@ heap_push_label1:
     inc  R9
     mov  [RCX + 8], R9
 
-    push R13
-    mov  R13, RCX
+    mov  R10, RCX
 
-    add  RCX, 16
     dec  R9
     mov  RDX, R9
     call sift_up
 
-    mov RAX, R13
-    pop R13
+    mov  RAX, R10
 
     ret
 
@@ -229,23 +236,42 @@ heap_push_label1:
 ; [out] RAX - ptr to heap
 heap_create:
     push R12
-
-    mov  R12, RCX
-
-    mov  R8, RCX
-    add  R8, 2
-    shl  R8, 3
+    mov  R12, RCX ; save capacity
 
     sub  RSP, 48
-    mov  RCX, NULL
-    mov  RDX, R8
-    mov  R8, MEM_COMMIT | MEM_RESERVE
-    mov  R9, PAGE_READWRITE
+
+    lea  RCX, [REL my_system_info + SYSTEM_INFO]
+    call GetSystemInfo
+
+    ; 2nd argument
+    add  R12, 2
+    shl  R12, 3
+
+    mov  RAX, R12
+    xor  RDX, RDX
+    mov  R9D, [REL my_system_info + SYSTEM_INFO + SYSTEM_INFO.dwPageSize]
+    div  R9
+    
+    mov  EAX, [REL my_system_info + SYSTEM_INFO + SYSTEM_INFO.dwPageSize]
+    sub  RAX, RDX
+    add  R12, RAX
+
+    mov  RDX, R12
+
+    shr  R12, 3
+    sub  R12, 2
+    ; ~2nd argument
+
+    mov  RCX, NULL ; 1st argument
+    mov  R8, MEM_COMMIT | MEM_RESERVE ; 3rd argument
+    mov  R9, PAGE_READWRITE ; 4th argument
     call VirtualAlloc
     add  RSP, 48
 
-    mov  [RAX], R12 ; capacity
-    mov  qword [RAX + 8], 0 ; size
+    mov  [RAX], R12 ; load capacity
+    ; no need to load size because memory
+    ; allocated by this function is
+    ; automatically initialized to zero
 
     pop  R12
 
@@ -256,15 +282,22 @@ heap_create:
 ; [in]  R8 - count
 ; [out] void
 memcpy:
-memcpy_label1:
+    ; count <= 0
     cmp  R8, 0
     jle  memcpy_label2
-    mov  R9, [RDX]
-    mov  [RCX], R9
-    dec  R8
-    add  RCX, 8
-    add  RDX, 8
-    jmp  memcpy_label1
+    ; swap R8 and RCX
+    mov  R9, RCX
+    mov  RCX, R8
+    mov  R8, R9
+    ; offset
+    mov  R10, 0
+memcpy_label1:
+    mov  R9, [RDX + R10 * 8]
+    mov  [R8 + R10 * 8], R9
+
+    inc  R10
+
+    loop memcpy_label1
 memcpy_label2:
     ret
 
@@ -272,11 +305,11 @@ memcpy_label2:
 ; [in]  RDX - new capacity
 ; [out] RAX - ptr to new heap
 heap_reserve:
-    push R12
-
     mov  R8, [RCX] ; capacity
     cmp  RDX, R8
     jle  heap_reserve_label1
+
+    push R12
 
     mov  R12, RCX ; ptr to heap
 
@@ -294,8 +327,12 @@ heap_reserve:
     mov  R12, RAX ; save RAX
     call heap_destroy
     mov  RAX, R12 ; load RAX
-heap_reserve_label1:
+
     pop  R12
+
+    ret
+heap_reserve_label1:
+    mov  RAX, RCX
 
     ret
 

@@ -17,7 +17,7 @@ TEST_CASE("Test #1") {
 	REQUIRE(my_heap != nullptr);
 	REQUIRE(heap_size(my_heap) == 0);
 	REQUIRE(heap_empty(my_heap));
-	REQUIRE((heap_capacity(my_heap) + 2) % capacity_divider == 0);
+	REQUIRE((heap_capacity(my_heap) + 3) % capacity_divider == 0);
 
 	for (int i = 0; i < 10000; i++) {
 		const uint64_t old_capacity = heap_capacity(my_heap);
@@ -37,15 +37,15 @@ TEST_CASE("Test #1") {
 			REQUIRE(new_capacity == old_capacity);
 		}
 
-		REQUIRE((new_capacity + 2) % capacity_divider == 0);
+		REQUIRE((new_capacity + 3) % capacity_divider == 0);
 	}
 
 	heap_destroy(my_heap);
 }
 
-TEST_CASE("Test #2") {
-	std::priority_queue<uint64_t> pq;
-	void* my_heap = heap_create(0);
+template <typename T>
+void test23(void* my_heap) {
+	T pq;
 	for (int k = 0; k < 10000; k++) {
 		const int action = rand() % 6;
 		if (action < 3) {
@@ -75,10 +75,27 @@ TEST_CASE("Test #2") {
 			REQUIRE(pq_size == my_heap_size);
 		}
 	}
+}
+
+TEST_CASE("Test #2") {
+	void* my_heap = heap_create(0);
+	test23<std::priority_queue<uint64_t>>(my_heap);
 	heap_destroy(my_heap);
 }
 
+bool greater_comparator(const uint64_t& lhs, const uint64_t& rhs) {
+	return lhs < rhs;
+}
+
 TEST_CASE("Test #3") {
+	void* my_heap = heap_create(0);
+	heap_set_comparator(my_heap, greater_comparator);
+	REQUIRE(heap_get_comparator(my_heap) == greater_comparator);
+	test23<std::priority_queue<uint64_t, std::vector<uint64_t>, std::greater<>>>(my_heap);
+	heap_destroy(my_heap);
+}
+
+TEST_CASE("Test #4") {
 	std::priority_queue<uint64_t> pq;
 	std::vector<uint64_t> data(10000);
 	for (size_t i = 0; i < data.size(); i++) {
@@ -96,6 +113,18 @@ TEST_CASE("Test #3") {
 	}
 
 	heap_destroy(my_heap);
+}
+
+TEST_CASE("Test #5") {
+	for (int i = 0; i < 10000; i++) {
+		uint64_t lhs = rand();
+		uint64_t rhs = rand();
+
+		bool my_result = (lhs > rhs);
+		bool heap_result = heap_default_comparator(lhs, rhs);
+
+		REQUIRE(my_result == heap_result);
+	}
 }
 
 TEST_CASE("Benchmark #1") {
